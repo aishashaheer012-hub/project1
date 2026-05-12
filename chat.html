@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ask Questions</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="container">
+    <h1>Ask Questions About: {{ filename }}</h1>
+    <textarea id="context" style="display:none;">{{ context }}</textarea>
+
+    <div class="chat-area" id="chat-area"></div>
+
+    <div class="input-area">
+      <input type="text" id="question" placeholder="Type your question..." />
+      <button onclick="askQuestion()">Ask</button>
+    </div>
+  </div>
+
+  <script>
+    async function askQuestion() {
+      const question = document.getElementById("question").value.trim();
+      if (!question) return;
+
+      const context = document.getElementById("context").textContent;
+
+      const data = new FormData();
+      data.append("context", context);
+      data.append("question", question);
+
+      const resp = await fetch("/ask", {
+        method: "POST",
+        body: new URLSearchParams(data),
+      });
+      const json = await resp.json();
+
+      const html = `
+        <div class="user-msg">
+          <strong>You:</strong> ${question}
+        </div>
+        <div class="ai-msg">
+          <strong>AI:</strong> ${json.answer}
+        </div>
+      `;
+      document.getElementById("chat-area").innerHTML += html;
+      document.getElementById("question").value = "";
+    }
+  </script>
+</body>
+</html>
