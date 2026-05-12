@@ -1,14 +1,16 @@
 import os
+import uuid
 import PyPDF2
 from flask import Flask, render_template, request, jsonify, redirect, url_for
+from google import genai
 
-# Use OpenAI for AI answers (you can change this later)
-USE_OPENAI = True
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-if USE_OPENAI:
-    import openai
-    # Best: set this via environment variable, not in code
-    openai.api_key = os.getenv("OPENAI_API_KEY")
+app = Flask(__name__)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
 def extract_text_from_pdf(pdf_path):
@@ -18,7 +20,7 @@ def extract_text_from_pdf(pdf_path):
         for page in reader.pages:
             page_text = page.extract_text()
             if page_text:
-                text += page_text + " "
+                text += page_text + "\n"
     return text
 
 
@@ -28,30 +30,28 @@ def extract_text_from_txt(txt_path):
 
 
 def qa_from_context(context: str, question: str) -> str:
-    if USE_OPENAI:
-        try:
-            resp = openai.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Answer based only on the document text."},
-                    {"role": "user", "content": f"Document:\n{context}\n\nQ: {question}\nA:"},
-                ],
-                max_tokens=512,
-                temperature=0.2,
-            )
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            return f"Error: {str(e)}"
-    else:
-        # Fake “mock” answer if you don’t have OpenAI
-        return f"(Mock mode) Your question was: {question}"
+    try:
+        prompt = f"""
+You are a helpful assistant that answers only from the document content.
 
+Document:
+{context}
 
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+Question:
+{question}
 
-app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+Rules:
+- Answer only using the document.
+- If the answer is not in the document, say you could not find it.
+- Keep the answer short and clear.
+"""
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        return response.text.strip() if response.text else "No answer returned."
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 
 @app.route("/")
@@ -69,16 +69,23 @@ def upload_file():
         return redirect(url_for("index"))
 
     if file and file.filename.lower().endswith((".pdf", ".txt")):
-        filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
+        safe_name = f"{uuid.uuid4().hex}_{file.filename}"
+        filepath = os.path.join(app.config["UPLOAD_FOLDER"], safe_name)
         file.save(filepath)
 
         if filepath.lower().endswith(".pdf"):
             context = extract_text_from_pdf(filepath)
-        elif filepath.lower().endswith(".txt"):
+        else:
             context = extract_text_from_txt(filepath)
 
-        # Show first ~10k chars of context in the template (for demo)
-        return render_template("chat.html", filename=file.filename, context=context[:10000] + "...")
+        if not context.strip():
+            context = "No text could be extracted from the uploaded file."
+
+        return render_template(
+            "chat.html",
+            filename=file.filename,
+            context=context[:20000]
+        )
 
     return "Only PDF and TXT files allowed.", 400
 
@@ -87,6 +94,7 @@ def upload_file():
 def ask_question():
     context = request.form.get("context", "")
     question = request.form.get("question", "").strip()
+
     if not question:
         return jsonify({"answer": "Please type a question."})
 
